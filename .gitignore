@@ -1,0 +1,14 @@
+# env files with secrets - never commit these
+.env
+.env.local
+.env*.local
+
+# Next.js
+.next/
+out/
+node_modules/
+
+# misc
+.DS_Store
+*.pem
+npm-debug.log*
