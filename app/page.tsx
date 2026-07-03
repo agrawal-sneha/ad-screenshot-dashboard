@@ -5,6 +5,8 @@ import { useState, useRef, useCallback, useEffect } from 'react'
 const TEAM_MEMBERS = [
   'Somil', 'Tanveer', 'Avishek', 'Rebika',
   'Hemanth', 'Bijit', 'Sneha', 'Manasvi', 'Ananya',
+  'Sakshi', 'Kalyan', 'Aashwin', 'Paritosh',
+  'Abhinav', 'Rishab', 'Sneha Ag', 'Rao',
 ]
 
 type Row = [string, string, string, string] // date, brand, person, link
