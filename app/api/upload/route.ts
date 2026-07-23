@@ -6,31 +6,59 @@ import { uploadToImgbb } from '@/lib/imgbb'
 const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/jpg']
 const MAX_SIZE_BYTES = 10 * 1024 * 1024 // 10MB
 
-export async function POST(req: NextRequest) {
+type UploadResult =
+  | { index: number; name: string; ok: true; brand: string; driveLink: string }
+  | { index: number; name: string; ok: false; error: string }
+
+// Bounded-concurrency map so large batches don't fire every imgbb/Gemini call at once.
+async function mapLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(items.length)
+  let cursor = 0
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (true) {
+      const i = cursor++
+      if (i >= items.length) return
+      results[i] = await fn(items[i], i)
+    }
+  })
+  await Promise.all(workers)
+  return results
+}
+
+async function processFile(file: File, index: number, person: string): Promise<UploadResult> {
+  if (!ALLOWED_TYPES.includes(file.type)) {
+    return { index, name: file.name, ok: false, error: 'Only image files are allowed (JPG, PNG, GIF, WEBP)' }
+  }
+  if (file.size > MAX_SIZE_BYTES) {
+    return { index, name: file.name, ok: false, error: 'File must be under 10MB' }
+  }
   try {
-    const formData = await req.formData()
-    const file = formData.get('file') as File | null
-    const person = formData.get('person') as string | null
-
-    if (!file) return NextResponse.json({ error: 'No file provided' }, { status: 400 })
-    if (!person) return NextResponse.json({ error: 'No person selected' }, { status: 400 })
-
-    if (!ALLOWED_TYPES.includes(file.type)) {
-      return NextResponse.json({ error: 'Only image files are allowed (JPG, PNG, GIF, WEBP)' }, { status: 400 })
-    }
-
-    if (file.size > MAX_SIZE_BYTES) {
-      return NextResponse.json({ error: 'File must be under 10MB' }, { status: 400 })
-    }
-
-    const bytes = await file.arrayBuffer()
-    const buffer = Buffer.from(bytes)
-
-    // Run imgbb upload and brand extraction in parallel
+    const buffer = Buffer.from(await file.arrayBuffer())
+    // Upload + brand detection run in parallel per image.
     const [driveLink, brand] = await Promise.all([
       uploadToImgbb(buffer, file.name),
       extractBrand(buffer, file.type),
     ])
+    return { index, name: file.name, ok: true, brand, driveLink }
+  } catch (err) {
+    return { index, name: file.name, ok: false, error: err instanceof Error ? err.message : 'Processing failed' }
+  }
+}
+
+export async function POST(req: NextRequest) {
+  try {
+    const formData = await req.formData()
+    const files = formData.getAll('file').filter((f): f is File => f instanceof File)
+    const person = formData.get('person') as string | null
+
+    if (files.length === 0) return NextResponse.json({ error: 'No file provided' }, { status: 400 })
+    if (!person) return NextResponse.json({ error: 'No person selected' }, { status: 400 })
+
+    const results = await mapLimit(files, 4, (file, index) => processFile(file, index, person))
 
     const date = new Date().toLocaleDateString('en-IN', {
       day: '2-digit',
@@ -38,9 +66,29 @@ export async function POST(req: NextRequest) {
       year: 'numeric',
     })
 
-    await appendToSheet([date, brand, person, driveLink])
+    const rows: string[][] = []
+    const uploaded: { index: number; name: string; brand: string; driveLink: string }[] = []
+    const failed: { index: number; name: string; error: string }[] = []
+    for (const r of results) {
+      if (r.ok) {
+        rows.push([date, r.brand, person, r.driveLink])
+        uploaded.push({ index: r.index, name: r.name, brand: r.brand, driveLink: r.driveLink })
+      } else {
+        failed.push({ index: r.index, name: r.name, error: r.error })
+      }
+    }
 
-    return NextResponse.json({ success: true, brand, driveLink, date, person })
+    // One batch append for every successfully processed image.
+    if (rows.length > 0) await appendToSheet(rows)
+
+    return NextResponse.json({
+      success: failed.length === 0,
+      count: uploaded.length,
+      date,
+      person,
+      uploaded,
+      failed,
+    })
   } catch (err) {
     console.error('Upload error:', err)
     const message = err instanceof Error ? err.message : 'Upload failed'

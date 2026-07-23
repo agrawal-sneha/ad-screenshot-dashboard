@@ -45,7 +45,7 @@ export async function uploadToDrive(
   return `https://drive.google.com/file/d/${fileId}/view`
 }
 
-export async function appendToSheet(row: string[]) {
+export async function appendToSheet(rows: string[][]) {
   const auth = getAuth()
   const sheets = google.sheets({ version: 'v4', auth })
 
@@ -53,7 +53,7 @@ export async function appendToSheet(row: string[]) {
     spreadsheetId: process.env.GOOGLE_SHEET_ID!,
     range: 'Sheet1!A:D',
     valueInputOption: 'USER_ENTERED',
-    requestBody: { values: [row] },
+    requestBody: { values: rows },
   })
 }
 
