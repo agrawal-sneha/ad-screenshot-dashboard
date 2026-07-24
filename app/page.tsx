@@ -10,11 +10,11 @@ const TEAM_MEMBERS = [
 ]
 
 type Row = [string, string, string, string] // date, brand, person, link
+type Attachment = { id: string; key: string; file: File; preview: string }
 
 export default function Dashboard() {
   const [person, setPerson] = useState('')
-  const [file, setFile] = useState<File | null>(null)
-  const [preview, setPreview] = useState<string | null>(null)
+  const [attachments, setAttachments] = useState<Attachment[]>([])
   const [dragging, setDragging] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null)
@@ -42,22 +42,50 @@ export default function Dashboard() {
     setTimeout(() => setToast(null), 4000)
   }
 
-  const handleFile = (f: File) => {
-    if (!f.type.startsWith('image/')) {
-      showToast('Only image files are supported', false)
-      return
-    }
-    setFile(f)
-    const reader = new FileReader()
-    reader.onload = e => setPreview(e.target?.result as string)
-    reader.readAsDataURL(f)
+  const handleFiles = (fileList: FileList | File[]) => {
+    const incoming = Array.from(fileList)
+    const images = incoming.filter(f => f.type.startsWith('image/'))
+    const rejected = incoming.length - images.length
+    if (rejected > 0) showToast(`Skipped ${rejected} non-image file${rejected > 1 ? 's' : ''}`, false)
+    if (images.length === 0) return
+
+    const additions: Attachment[] = images.map(f => ({
+      id: `${f.name}:${f.size}:${f.lastModified}:${Math.random().toString(36).slice(2)}`,
+      key: `${f.name}:${f.size}:${f.lastModified}`,
+      file: f,
+      preview: '',
+    }))
+
+    setAttachments(prev => {
+      const seen = new Set(prev.map(a => a.key))
+      const merged = [...prev]
+      for (const a of additions) {
+        if (seen.has(a.key)) continue
+        seen.add(a.key)
+        merged.push(a)
+      }
+      return merged
+    })
+
+    additions.forEach(att => {
+      const reader = new FileReader()
+      reader.onload = e => {
+        const url = e.target?.result as string
+        setAttachments(cur => cur.map(a => (a.id === att.id ? { ...a, preview: url } : a)))
+      }
+      reader.readAsDataURL(att.file)
+    })
   }
+
+  const removeAttachment = (id: string) =>
+    setAttachments(prev => prev.filter(a => a.id !== id))
+
+  const clearAll = () => setAttachments([])
 
   const onDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault()
     setDragging(false)
-    const f = e.dataTransfer.files[0]
-    if (f) handleFile(f)
+    if (e.dataTransfer.files?.length) handleFiles(e.dataTransfer.files)
   }, [])
 
   const onDragOver = (e: React.DragEvent) => { e.preventDefault(); setDragging(true) }
@@ -65,13 +93,13 @@ export default function Dashboard() {
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!file) return showToast('Please select a screenshot', false)
+    if (attachments.length === 0) return showToast('Please select at least one screenshot', false)
     if (!person) return showToast('Please select your name', false)
 
     setUploading(true)
     try {
       const fd = new FormData()
-      fd.append('file', file)
+      attachments.forEach(a => fd.append('file', a.file))
       fd.append('person', person)
 
       const res = await fetch('/api/upload', { method: 'POST', body: fd })
@@ -79,9 +107,28 @@ export default function Dashboard() {
 
       if (!res.ok) throw new Error(json.error || 'Upload failed')
 
-      showToast(`Uploaded! Brand detected: ${json.brand}`, true)
-      setFile(null)
-      setPreview(null)
+      const uploaded: { brand: string }[] = json.uploaded ?? []
+      const failed: { index: number; name: string; error: string }[] = json.failed ?? []
+
+      if (uploaded.length === 0) {
+        showToast(failed.length ? `All ${failed.length} upload${failed.length > 1 ? 's' : ''} failed` : 'Nothing uploaded', false)
+      } else {
+        const brands = uploaded.map(u => u.brand).filter(Boolean)
+        const shown = brands.slice(0, 3).join(', ')
+        const more = brands.length > 3 ? ` +${brands.length - 3}` : ''
+        const okMsg = uploaded.length === 1
+          ? `Uploaded! Brand: ${brands[0] ?? 'Unknown'}`
+          : `Uploaded ${uploaded.length} screenshots (${shown}${more})`
+        showToast(failed.length ? `${okMsg} · ${failed.length} failed` : okMsg, failed.length === 0)
+      }
+
+      // Clear on full success; otherwise keep only the failed files (by upload index) for retry.
+      if (failed.length === 0) {
+        setAttachments([])
+      } else {
+        const failedIdx = new Set<number>(failed.map(f => f.index))
+        setAttachments(prev => prev.filter((_, i) => failedIdx.has(i)))
+      }
       if (fileInputRef.current) fileInputRef.current.value = ''
       fetchRows()
     } catch (err) {
@@ -126,22 +173,51 @@ export default function Dashboard() {
                 ref={fileInputRef}
                 type="file"
                 accept="image/*"
+                multiple
                 className="hidden"
-                onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f) }}
+                onChange={e => { if (e.target.files?.length) handleFiles(e.target.files); e.target.value = '' }}
               />
-              {preview ? (
-                <div className="p-3 flex items-center gap-4">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={preview} alt="preview" className="h-24 w-24 object-cover rounded-md border border-gray-200" />
-                  <div>
-                    <p className="text-sm font-medium text-gray-800">{file?.name}</p>
-                    <p className="text-xs text-gray-500 mt-0.5">{file ? (file.size / 1024).toFixed(1) : 0} KB</p>
+              {attachments.length > 0 ? (
+                <div className="p-3">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                    {attachments.map(att => (
+                      <div key={att.id} className="relative group border border-gray-200 rounded-md overflow-hidden bg-gray-50">
+                        <button
+                          type="button"
+                          onClick={e => { e.stopPropagation(); removeAttachment(att.id) }}
+                          className="absolute top-1 right-1 z-10 w-6 h-6 flex items-center justify-center rounded-full bg-black/60 text-white text-xs opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/80"
+                          aria-label={`Remove ${att.file.name}`}
+                        >
+                          ✕
+                        </button>
+                        {att.preview ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={att.preview} alt={att.file.name} className="h-24 w-full object-cover" />
+                        ) : (
+                          <div className="h-24 w-full flex items-center justify-center text-gray-300">
+                            <svg className="animate-spin h-5 w-5" fill="none" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                            </svg>
+                          </div>
+                        )}
+                        <div className="px-2 py-1.5">
+                          <p className="text-xs font-medium text-gray-700 truncate" title={att.file.name}>{att.file.name}</p>
+                          <p className="text-[11px] text-gray-400">{(att.file.size / 1024).toFixed(1)} KB</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-3 flex items-center justify-between text-xs">
+                    <span className="text-gray-500">
+                      {attachments.length} file{attachments.length > 1 ? 's' : ''} selected · click to add more
+                    </span>
                     <button
                       type="button"
-                      onClick={e => { e.stopPropagation(); setFile(null); setPreview(null) }}
-                      className="text-xs text-red-500 hover:text-red-700 mt-1"
+                      onClick={e => { e.stopPropagation(); clearAll() }}
+                      className="text-red-500 hover:text-red-700"
                     >
-                      Remove
+                      Clear all
                     </button>
                   </div>
                 </div>
@@ -153,7 +229,7 @@ export default function Dashboard() {
                   <p className="mt-2 text-sm text-gray-600">
                     <span className="font-medium text-blue-600">Click to upload</span> or drag and drop
                   </p>
-                  <p className="text-xs text-gray-400 mt-1">PNG, JPG, WEBP, GIF up to 10MB</p>
+                  <p className="text-xs text-gray-400 mt-1">PNG, JPG, WEBP, GIF up to 10MB · multiple allowed</p>
                 </div>
               )}
             </div>
@@ -172,7 +248,7 @@ export default function Dashboard() {
               </select>
               <button
                 type="submit"
-                disabled={uploading || !file || !person}
+                disabled={uploading || attachments.length === 0 || !person}
                 className="px-5 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
               >
                 {uploading ? (
@@ -183,7 +259,7 @@ export default function Dashboard() {
                     </svg>
                     Uploading...
                   </>
-                ) : 'Upload'}
+                ) : attachments.length > 1 ? `Upload ${attachments.length}` : 'Upload'}
               </button>
             </div>
           </form>
