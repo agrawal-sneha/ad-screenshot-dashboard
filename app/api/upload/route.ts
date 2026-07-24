@@ -6,6 +6,12 @@ import { uploadToImgbb } from '@/lib/imgbb'
 const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/jpg']
 const MAX_SIZE_BYTES = 10 * 1024 * 1024 // 10MB
 
+// googleapis needs the Node runtime; allow headroom for paced/retried free-tier Gemini calls.
+export const runtime = 'nodejs'
+export const maxDuration = 60
+// Files processed in parallel. Lower is gentler on Gemini free-tier rate limits.
+const CONCURRENCY = Math.max(1, Number(process.env.UPLOAD_CONCURRENCY ?? 2))
+
 type UploadResult =
   | { index: number; name: string; ok: true; brand: string; driveLink: string }
   | { index: number; name: string; ok: false; error: string }
@@ -58,7 +64,7 @@ export async function POST(req: NextRequest) {
     if (files.length === 0) return NextResponse.json({ error: 'No file provided' }, { status: 400 })
     if (!person) return NextResponse.json({ error: 'No person selected' }, { status: 400 })
 
-    const results = await mapLimit(files, 4, (file, index) => processFile(file, index, person))
+    const results = await mapLimit(files, CONCURRENCY, (file, index) => processFile(file, index, person))
 
     const date = new Date().toLocaleDateString('en-IN', {
       day: '2-digit',
