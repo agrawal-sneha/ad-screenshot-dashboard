@@ -1,5 +1,20 @@
 import { google } from 'googleapis'
 import { Readable } from 'stream'
+import { promises as fsp } from 'node:fs'
+import { join, dirname } from 'node:path'
+
+// Local demo store used when Google credentials aren't configured.
+const DEMO_STORE = join(process.cwd(), '.demo-data', 'rows.json')
+const demoEnabled = () => !process.env.GOOGLE_SERVICE_ACCOUNT_JSON
+async function demoRead(): Promise<string[][]> {
+  try { return JSON.parse(await fsp.readFile(DEMO_STORE, 'utf8')) as string[][] } catch { return [] }
+}
+async function demoAppend(rows: string[][]): Promise<void> {
+  const cur = await demoRead()
+  cur.push(...rows)
+  await fsp.mkdir(dirname(DEMO_STORE), { recursive: true })
+  await fsp.writeFile(DEMO_STORE, JSON.stringify(cur, null, 2))
+}
 
 function getAuth() {
   const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON
@@ -46,6 +61,7 @@ export async function uploadToDrive(
 }
 
 export async function appendToSheet(rows: string[][]) {
+  if (demoEnabled()) return demoAppend(rows)
   const auth = getAuth()
   const sheets = google.sheets({ version: 'v4', auth })
 
@@ -58,6 +74,7 @@ export async function appendToSheet(rows: string[][]) {
 }
 
 export async function getSheetData(): Promise<string[][]> {
+  if (demoEnabled()) return demoRead()
   const auth = getAuth()
   const sheets = google.sheets({ version: 'v4', auth })
 

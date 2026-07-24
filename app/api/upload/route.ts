@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { appendToSheet } from '@/lib/google'
 import { extractBrand } from '@/lib/claude'
 import { uploadToImgbb } from '@/lib/imgbb'
+import { extractBrandViaCopilot } from '@/lib/copilotMock'
 
 const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/jpg']
 const MAX_SIZE_BYTES = 10 * 1024 * 1024 // 10MB
@@ -35,6 +36,12 @@ async function mapLimit<T, R>(
   return results
 }
 
+// Demo mode derives a brand from the filename instead of calling Gemini (no key/quota needed).
+function demoBrand(filename: string): string {
+  const base = filename.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ').trim()
+  return base ? base.replace(/\b\w/g, c => c.toUpperCase()) : 'Unknown'
+}
+
 async function processFile(file: File, index: number, person: string): Promise<UploadResult> {
   if (!ALLOWED_TYPES.includes(file.type)) {
     return { index, name: file.name, ok: false, error: 'Only image files are allowed (JPG, PNG, GIF, WEBP)' }
@@ -45,9 +52,14 @@ async function processFile(file: File, index: number, person: string): Promise<U
   try {
     const buffer = Buffer.from(await file.arrayBuffer())
     // Upload + brand detection run in parallel per image.
+    const detectBrand = process.env.COPILOT_MOCK
+      ? extractBrandViaCopilot(buffer, file.type)
+      : process.env.DEMO_MODE
+      ? Promise.resolve(demoBrand(file.name))
+      : extractBrand(buffer, file.type)
     const [driveLink, brand] = await Promise.all([
       uploadToImgbb(buffer, file.name),
-      extractBrand(buffer, file.type),
+      detectBrand,
     ])
     return { index, name: file.name, ok: true, brand, driveLink }
   } catch (err) {
