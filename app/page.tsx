@@ -10,7 +10,7 @@ const TEAM_MEMBERS = [
 ]
 
 type Row = [string, string, string, string] // date, brand, person, link
-type Attachment = { id: string; key: string; file: File; preview: string }
+type Attachment = { id: string; key: string; file: File; preview: string; status: 'idle' | 'uploaded' | 'error' | 'duplicate' }
 
 export default function Dashboard() {
   const [person, setPerson] = useState('')
@@ -54,6 +54,7 @@ export default function Dashboard() {
       key: `${f.name}:${f.size}:${f.lastModified}`,
       file: f,
       preview: '',
+      status: 'idle',
     }))
 
     setAttachments(prev => {
@@ -117,7 +118,7 @@ export default function Dashboard() {
         return
       }
 
-      const uploaded: { brand: string }[] = json.uploaded ?? []
+      const uploaded: { index: number; name: string; brand: string; driveLink: string }[] = json.uploaded ?? []
       const failed: { index: number; name: string; error: string }[] = json.failed ?? []
 
       if (uploaded.length === 0) {
@@ -132,12 +133,23 @@ export default function Dashboard() {
         showToast(failed.length ? `${okMsg} · ${failed.length} failed` : okMsg, failed.length === 0)
       }
 
-      // Clear on full success; otherwise keep only the failed files (by upload index) for retry.
+      // Mark uploaded and failed files with their status for UI highlighting
+      const uploadedIdx = new Set<number>(uploaded.map(u => u.index))
+      const duplicateIdx = new Set<number>(
+        failed
+          .filter(f => f.error.includes('already uploaded') || f.error.includes('Duplicate'))
+          .map(f => f.index)
+      )
+      setAttachments(prev => prev.map((att, i) => {
+        if (uploadedIdx.has(i)) return { ...att, status: 'uploaded' }
+        if (duplicateIdx.has(i)) return { ...att, status: 'duplicate' }
+        if (failed.some(f => f.index === i)) return { ...att, status: 'error' }
+        return att
+      }))
+
+      // Clear on full success; otherwise remove the successfully uploaded ones
       if (failed.length === 0) {
         setAttachments([])
-      } else {
-        const failedIdx = new Set<number>(failed.map(f => f.index))
-        setAttachments(prev => prev.filter((_, i) => failedIdx.has(i)))
       }
       if (fileInputRef.current) fileInputRef.current.value = ''
       fetchRows()
@@ -190,33 +202,55 @@ export default function Dashboard() {
               {attachments.length > 0 ? (
                 <div className="p-3">
                   <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-                    {attachments.map(att => (
-                      <div key={att.id} className="relative group border border-gray-200 rounded-md overflow-hidden bg-gray-50">
-                        <button
-                          type="button"
-                          onClick={e => { e.stopPropagation(); removeAttachment(att.id) }}
-                          className="absolute top-1 right-1 z-10 w-6 h-6 flex items-center justify-center rounded-full bg-black/60 text-white text-xs opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/80"
-                          aria-label={`Remove ${att.file.name}`}
-                        >
-                          ✕
-                        </button>
-                        {att.preview ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img src={att.preview} alt={att.file.name} className="h-24 w-full object-cover" />
-                        ) : (
-                          <div className="h-24 w-full flex items-center justify-center text-gray-300">
-                            <svg className="animate-spin h-5 w-5" fill="none" viewBox="0 0 24 24">
-                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
-                            </svg>
+                    {attachments.map(att => {
+                      const borderColor =
+                        att.status === 'duplicate' ? 'border-red-500 ring-2 ring-red-200' :
+                        att.status === 'error' ? 'border-red-400' :
+                        att.status === 'uploaded' ? 'border-green-500' :
+                        'border-gray-200'
+                      return (
+                        <div key={att.id} className={`relative group rounded-md overflow-hidden bg-gray-50 border-2 ${borderColor}`}>
+                          <button
+                            type="button"
+                            onClick={e => { e.stopPropagation(); removeAttachment(att.id) }}
+                            className="absolute top-1 right-1 z-10 w-6 h-6 flex items-center justify-center rounded-full bg-black/60 text-white text-xs opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/80"
+                            aria-label={`Remove ${att.file.name}`}
+                          >
+                            ✕
+                          </button>
+                          {att.status === 'duplicate' && (
+                            <div className="absolute top-1 left-1 z-10 bg-red-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded">
+                              DUPLICATE
+                            </div>
+                          )}
+                          {att.status === 'error' && (
+                            <div className="absolute top-1 left-1 z-10 bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded">
+                              FAILED
+                            </div>
+                          )}
+                          {att.status === 'uploaded' && (
+                            <div className="absolute top-1 left-1 z-10 bg-green-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded">
+                              ✓ UPLOADED
+                            </div>
+                          )}
+                          {att.preview ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={att.preview} alt={att.file.name} className="h-24 w-full object-cover" />
+                          ) : (
+                            <div className="h-24 w-full flex items-center justify-center text-gray-300">
+                              <svg className="animate-spin h-5 w-5" fill="none" viewBox="0 0 24 24">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                              </svg>
+                            </div>
+                          )}
+                          <div className="px-2 py-1.5">
+                            <p className="text-xs font-medium text-gray-700 truncate" title={att.file.name}>{att.file.name}</p>
+                            <p className="text-[11px] text-gray-400">{(att.file.size / 1024).toFixed(1)} KB</p>
                           </div>
-                        )}
-                        <div className="px-2 py-1.5">
-                          <p className="text-xs font-medium text-gray-700 truncate" title={att.file.name}>{att.file.name}</p>
-                          <p className="text-[11px] text-gray-400">{(att.file.size / 1024).toFixed(1)} KB</p>
                         </div>
-                      </div>
-                    ))}
+                      )
+                    })}
                   </div>
                   <div className="mt-3 flex items-center justify-between text-xs">
                     <span className="text-gray-500">
