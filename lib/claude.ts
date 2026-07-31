@@ -74,5 +74,7 @@ export async function extractBrand(imageBuffer: Buffer, mimeType: string): Promi
       await sleep(backoff + Math.floor(Math.random() * 250))
     }
   }
-  throw lastErr instanceof Error ? lastErr : new Error('Gemini request failed')
+  // Never throw — return Unknown so the upload batch continues.
+  console.error('[brand] Gemini failed after retries:', lastErr)
+  return 'Unknown'
 }

@@ -105,7 +105,17 @@ export default function Dashboard() {
       const res = await fetch('/api/upload', { method: 'POST', body: fd })
       const json = await res.json()
 
-      if (!res.ok) throw new Error(json.error || 'Upload failed')
+      if (!res.ok) {
+        // Handle different error types with appropriate colors
+        if (res.status === 409) {
+          // Duplicate screenshot - red toast
+          showToast(`Duplicate: ${json.error}`, false)
+        } else {
+          // Other errors - red toast
+          showToast(json.error || 'Upload failed', false)
+        }
+        return
+      }
 
       const uploaded: { brand: string }[] = json.uploaded ?? []
       const failed: { index: number; name: string; error: string }[] = json.failed ?? []
@@ -145,7 +155,7 @@ export default function Dashboard() {
         <div className="max-w-5xl mx-auto px-6 py-4 flex items-center gap-3">
           <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
             <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 002 2v12a2 2 0 002 2z" />
             </svg>
           </div>
           <div>
@@ -224,7 +234,7 @@ export default function Dashboard() {
               ) : (
                 <div className="py-10 text-center">
                   <svg className="mx-auto h-10 w-10 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 16.5v2.25A2.25A2.25 0 005.25 21h13.5A2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
                   </svg>
                   <p className="mt-2 text-sm text-gray-600">
                     <span className="font-medium text-blue-600">Click to upload</span> or drag and drop

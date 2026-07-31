@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { appendToSheet } from '@/lib/google'
+import { appendToSheet, getSheetData } from '@/lib/google'
 import { extractBrand } from '@/lib/claude'
 import { uploadToImgbb } from '@/lib/imgbb'
 
@@ -35,6 +35,35 @@ async function mapLimit<T, R>(
   return results
 }
 
+/**
+ * Extract filename from an imgbb URL.
+ * imgbb URLs look like: https://i.ibb.co/abc123/original-filename.jpg
+ */
+function filenameFromImgbbUrl(url: string): string {
+  try {
+    const pathname = new URL(url).pathname
+    const filename = pathname.split('/').pop() || ''
+    // Strip imgbb's random prefix (e.g. "abc123-") if present
+    return filename.replace(/^[a-zA-Z0-9]+-/, '')
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * Check if a filename has already been uploaded by this person.
+ * Looks at existing sheet rows and compares the imgbb URL filename.
+ */
+async function isDuplicate(person: string, filename: string): Promise<boolean> {
+  const rows = await getSheetData()
+  const normalized = filename.toLowerCase()
+  return rows.some(row => {
+    if (row[2] !== person) return false
+    const existingName = filenameFromImgbbUrl(row[3])
+    return existingName.toLowerCase() === normalized
+  })
+}
+
 async function processFile(file: File, index: number, person: string): Promise<UploadResult> {
   if (!ALLOWED_TYPES.includes(file.type)) {
     return { index, name: file.name, ok: false, error: 'Only image files are allowed (JPG, PNG, GIF, WEBP)' }
@@ -42,16 +71,30 @@ async function processFile(file: File, index: number, person: string): Promise<U
   if (file.size > MAX_SIZE_BYTES) {
     return { index, name: file.name, ok: false, error: 'File must be under 10MB' }
   }
+
+  // Check for duplicate filename for this person
+  const dup = await isDuplicate(person, file.name)
+  if (dup) {
+    return {
+      index,
+      name: file.name,
+      ok: false,
+      error: `"${file.name}" was already uploaded by ${person}. Screenshot names must be unique per person.`,
+    }
+  }
+
   try {
     const buffer = Buffer.from(await file.arrayBuffer())
-    // Upload + brand detection run in parallel per image.
-    const [driveLink, brand] = await Promise.all([
-      uploadToImgbb(buffer, file.name),
-      extractBrand(buffer, file.type),
-    ])
+    const driveLink = await uploadToImgbb(buffer, file.name)
+    // extractBrand never throws — always returns a string ("Unknown" on failure)
+    const brand = await extractBrand(buffer, file.type)
     return { index, name: file.name, ok: true, brand, driveLink }
   } catch (err) {
-    return { index, name: file.name, ok: false, error: err instanceof Error ? err.message : 'Processing failed' }
+    const msg = err instanceof Error ? err.message : 'Processing failed'
+    if (msg.includes('imgbb') || msg.includes('imgbb.com')) {
+      return { index, name: file.name, ok: false, error: `Image hosting (imgbb) failed: ${msg}. Try again later.` }
+    }
+    return { index, name: file.name, ok: false, error: msg }
   }
 }
 
