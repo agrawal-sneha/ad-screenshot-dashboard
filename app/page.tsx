@@ -343,17 +343,8 @@ export default function Dashboard() {
                       <td className="px-6 py-3 text-gray-700 font-medium">{row[2] || '—'}</td>
                       <td className="px-6 py-3">
                         {row[3] ? (
-                          <a
-                            href={row[3]}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 text-blue-600 hover:underline"
-                          >
-                            View
-                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                            </svg>
-                          </a>
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={row[3]} alt="Screenshot" className="h-12 w-auto object-cover rounded border border-gray-200 cursor-pointer" onClick={() => window.open(row[3], '_blank')} />
                         ) : '—'}
                       </td>
                     </tr>
