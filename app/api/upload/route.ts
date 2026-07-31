@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { appendToSheet, getSheetData } from '@/lib/google'
+import { appendToSheet, getSheetData, uploadToDrive } from '@/lib/google'
 import { extractBrand } from '@/lib/claude'
-import { uploadToImgbb } from '@/lib/imgbb'
 
 const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/jpg']
 const MAX_SIZE_BYTES = 10 * 1024 * 1024 // 10MB
@@ -36,15 +35,17 @@ async function mapLimit<T, R>(
 }
 
 /**
- * Extract filename from an imgbb URL.
- * imgbb URLs look like: https://i.ibb.co/abc123/original-filename.jpg
+ * Extract filename from a Drive URL.
+ * Drive URLs look like: https://drive.google.com/file/d/ABC123/view
  */
-function filenameFromImgbbUrl(url: string): string {
+function filenameFromDriveUrl(url: string): string {
   try {
-    const pathname = new URL(url).pathname
-    const filename = pathname.split('/').pop() || ''
-    // Strip imgbb's random prefix (e.g. "abc123-") if present
-    return filename.replace(/^[a-zA-Z0-9]+-/, '')
+    const match = url.match(/\/file\/d\/([^/]+)/)
+    if (!match) return ''
+    // We don't have the original filename in the Drive URL,
+    // so we use the file ID as the identifier for duplicate checking.
+    // Duplicate prevention relies on the original filename instead.
+    return ''
   } catch {
     return ''
   }
@@ -52,16 +53,21 @@ function filenameFromImgbbUrl(url: string): string {
 
 /**
  * Check if a filename has already been uploaded by this person.
- * Looks at existing sheet rows and compares the imgbb URL filename.
+ * Looks at existing sheet rows and compares the original filename.
+ * Since Drive URLs don't contain the filename, we check if the same person
+ * has uploaded the same number of files with similar timing.
+ * A simpler approach: store original filename in a separate column or
+ * check by Drive file ID pattern.
+ *
+ * For now, we skip duplicate checking for Drive uploads since the URL
+ * doesn't contain the original filename. The duplicate prevention
+ * is mainly to avoid re-uploading the same screenshot.
  */
 async function isDuplicate(person: string, filename: string): Promise<boolean> {
-  const rows = await getSheetData()
-  const normalized = filename.toLowerCase()
-  return rows.some(row => {
-    if (row[2] !== person) return false
-    const existingName = filenameFromImgbbUrl(row[3])
-    return existingName.toLowerCase() === normalized
-  })
+  // With Google Drive hosting, we can't reliably extract the original filename
+  // from the Drive URL. Skip duplicate check for Drive-based uploads.
+  // The frontend can show upload history to help users avoid duplicates.
+  return false
 }
 
 async function processFile(file: File, index: number, person: string): Promise<UploadResult> {
@@ -73,8 +79,12 @@ async function processFile(file: File, index: number, person: string): Promise<U
   }
 
   // Check for duplicate filename for this person
-  const dup = await isDuplicate(person, file.name)
-  if (dup) {
+  const existingRows = await getSheetData()
+  const normalized = file.name.toLowerCase()
+  const isDup = existingRows.some(
+    row => row[2] === person && (row[4]?.toLowerCase() === normalized)
+  )
+  if (isDup) {
     return {
       index,
       name: file.name,
@@ -85,14 +95,15 @@ async function processFile(file: File, index: number, person: string): Promise<U
 
   try {
     const buffer = Buffer.from(await file.arrayBuffer())
-    const driveLink = await uploadToImgbb(buffer, file.name)
+    // Upload to Google Drive instead of ImgBB (no rate limits!)
+    const driveLink = await uploadToDrive(buffer, file.name, file.type)
     // extractBrand never throws — always returns a string ("Unknown" on failure)
     const brand = await extractBrand(buffer, file.type)
     return { index, name: file.name, ok: true, brand, driveLink }
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Processing failed'
-    if (msg.includes('imgbb') || msg.includes('imgbb.com')) {
-      return { index, name: file.name, ok: false, error: `Image hosting (imgbb) failed: ${msg}. Try again later.` }
+    if (msg.includes('google') || msg.includes('Drive') || msg.includes('sheet')) {
+      return { index, name: file.name, ok: false, error: `Google service failed: ${msg}. Try again later.` }
     }
     return { index, name: file.name, ok: false, error: msg }
   }
@@ -120,7 +131,7 @@ export async function POST(req: NextRequest) {
     const failed: { index: number; name: string; error: string }[] = []
     for (const r of results) {
       if (r.ok) {
-        rows.push([date, r.brand, person, r.driveLink])
+        rows.push([date, r.brand, person, r.driveLink, r.name]) // name stored for duplicate checking
         uploaded.push({ index: r.index, name: r.name, brand: r.brand, driveLink: r.driveLink })
       } else {
         failed.push({ index: r.index, name: r.name, error: r.error })

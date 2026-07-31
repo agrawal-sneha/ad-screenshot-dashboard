@@ -51,7 +51,7 @@ export async function appendToSheet(rows: string[][]) {
 
   await sheets.spreadsheets.values.append({
     spreadsheetId: process.env.GOOGLE_SHEET_ID!,
-    range: 'Sheet1!A:D',
+    range: 'Sheet1!A:E',
     valueInputOption: 'USER_ENTERED',
     requestBody: { values: rows },
   })
@@ -63,7 +63,7 @@ export async function getSheetData(): Promise<string[][]> {
 
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: process.env.GOOGLE_SHEET_ID!,
-    range: 'Sheet1!A:D',
+    range: 'Sheet1!A:E',
   })
 
   return (res.data.values as string[][]) || []
