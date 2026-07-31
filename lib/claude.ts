@@ -57,7 +57,8 @@ async function generateOnce(imageBuffer: Buffer, mimeType: string): Promise<stri
       },
     ],
   })
-  return result.text?.trim() || 'Unknown'
+  const text = result.text?.trim()
+  return text && text.toLowerCase() !== 'undefined' ? text : 'Unknown'
 }
 
 export async function extractBrand(imageBuffer: Buffer, mimeType: string): Promise<string> {
