@@ -12,3 +12,8 @@ node_modules/
 .DS_Store
 *.pem
 npm-debug.log*
+*.tsbuildinfo
+
+# local runtime data (demo sheet rows + locally-served uploads)
+.demo-data/
+public/uploads/

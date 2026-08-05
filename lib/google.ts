@@ -7,13 +7,28 @@ import { join, dirname } from 'node:path'
 const DEMO_STORE = join(process.cwd(), '.demo-data', 'rows.json')
 const demoEnabled = () => !process.env.GOOGLE_SERVICE_ACCOUNT_JSON
 async function demoRead(): Promise<string[][]> {
-  try { return JSON.parse(await fsp.readFile(DEMO_STORE, 'utf8')) as string[][] } catch { return [] }
+  try {
+    const parsed = JSON.parse(await fsp.readFile(DEMO_STORE, 'utf8'))
+    return Array.isArray(parsed) ? (parsed as string[][]) : []
+  } catch { return [] }
 }
+
+// Appending is read-modify-write, so parallel uploads would otherwise overwrite each
+// other's rows (20 concurrent appends kept only 1). Serialize them through a chain.
+let demoWriteQueue: Promise<void> = Promise.resolve()
 async function demoAppend(rows: string[][]): Promise<void> {
-  const cur = await demoRead()
-  cur.push(...rows)
-  await fsp.mkdir(dirname(DEMO_STORE), { recursive: true })
-  await fsp.writeFile(DEMO_STORE, JSON.stringify(cur, null, 2))
+  const next = demoWriteQueue.then(async () => {
+    const cur = await demoRead()
+    cur.push(...rows)
+    await fsp.mkdir(dirname(DEMO_STORE), { recursive: true })
+    // Write to a sibling temp file then rename so a crash mid-write can't truncate
+    // the store.
+    const tmp = `${DEMO_STORE}.${process.pid}.tmp`
+    await fsp.writeFile(tmp, JSON.stringify(cur, null, 2))
+    await fsp.rename(tmp, DEMO_STORE)
+  })
+  demoWriteQueue = next.then(() => undefined, () => undefined)
+  return next
 }
 
 function getAuth() {

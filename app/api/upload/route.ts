@@ -2,16 +2,34 @@ import { NextRequest, NextResponse } from 'next/server'
 import { appendToSheet } from '@/lib/google'
 import { extractBrand } from '@/lib/claude'
 import { uploadToImgbb } from '@/lib/imgbb'
-import { extractBrandViaCopilot } from '@/lib/copilotMock'
+import { extractBrandViaCopilot } from '@/lib/copilot'
 
 const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/jpg']
 const MAX_SIZE_BYTES = 10 * 1024 * 1024 // 10MB
+const MAX_FILES = envInt(process.env.UPLOAD_MAX_FILES, 50, 1)
 
-// googleapis needs the Node runtime; allow headroom for paced/retried free-tier Gemini calls.
 export const runtime = 'nodejs'
-export const maxDuration = 60
-// Files processed in parallel. Lower is gentler on Gemini free-tier rate limits.
-const CONCURRENCY = Math.max(1, Number(process.env.UPLOAD_CONCURRENCY ?? 2))
+export const maxDuration = 300
+// Files processed in parallel. Each one gets its own Copilot session.
+const CONCURRENCY = envInt(process.env.UPLOAD_CONCURRENCY, 4, 1)
+
+// Number(undefined) and Number('abc') are both NaN, and NaN silently poisoned the
+// concurrency limit (zero workers, every upload failing), so bad values fall back.
+function envInt(raw: string | undefined, fallback: number, min: number): number {
+  const parsed = Number(raw)
+  return Number.isInteger(parsed) && parsed >= min ? parsed : fallback
+}
+
+// Any non-empty string is truthy, so `DEMO_MODE=false` used to still enable demo mode.
+function envFlag(raw: string | undefined): boolean {
+  if (!raw) return false
+  return !['false', '0', 'no', 'off', ''].includes(raw.trim().toLowerCase())
+}
+
+// Copilot SDK is the default brand backend; it uses the local Copilot subscription
+// rather than a separate API key.
+const USE_GEMINI = envFlag(process.env.USE_GEMINI)
+const DEMO_MODE = envFlag(process.env.DEMO_MODE)
 
 type UploadResult =
   | { index: number; name: string; ok: true; brand: string; driveLink: string }
@@ -42,9 +60,12 @@ function demoBrand(filename: string): string {
   return base ? base.replace(/\b\w/g, c => c.toUpperCase()) : 'Unknown'
 }
 
-async function processFile(file: File, index: number, person: string): Promise<UploadResult> {
+async function processFile(file: File, index: number): Promise<UploadResult> {
   if (!ALLOWED_TYPES.includes(file.type)) {
     return { index, name: file.name, ok: false, error: 'Only image files are allowed (JPG, PNG, GIF, WEBP)' }
+  }
+  if (file.size === 0) {
+    return { index, name: file.name, ok: false, error: 'File is empty' }
   }
   if (file.size > MAX_SIZE_BYTES) {
     return { index, name: file.name, ok: false, error: 'File must be under 10MB' }
@@ -52,11 +73,11 @@ async function processFile(file: File, index: number, person: string): Promise<U
   try {
     const buffer = Buffer.from(await file.arrayBuffer())
     // Upload + brand detection run in parallel per image.
-    const detectBrand = process.env.COPILOT_MOCK
-      ? extractBrandViaCopilot(buffer, file.type)
-      : process.env.DEMO_MODE
+    const detectBrand = DEMO_MODE
       ? Promise.resolve(demoBrand(file.name))
-      : extractBrand(buffer, file.type)
+      : USE_GEMINI
+      ? extractBrand(buffer, file.type)
+      : extractBrandViaCopilot(buffer, file.type)
     const [driveLink, brand] = await Promise.all([
       uploadToImgbb(buffer, file.name),
       detectBrand,
@@ -75,8 +96,11 @@ export async function POST(req: NextRequest) {
 
     if (files.length === 0) return NextResponse.json({ error: 'No file provided' }, { status: 400 })
     if (!person) return NextResponse.json({ error: 'No person selected' }, { status: 400 })
+    if (files.length > MAX_FILES) {
+      return NextResponse.json({ error: `Too many files — max ${MAX_FILES} per upload` }, { status: 400 })
+    }
 
-    const results = await mapLimit(files, CONCURRENCY, (file, index) => processFile(file, index, person))
+    const results = await mapLimit(files, CONCURRENCY, (file, index) => processFile(file, index))
 
     const date = new Date().toLocaleDateString('en-IN', {
       day: '2-digit',
